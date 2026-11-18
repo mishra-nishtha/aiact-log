@@ -1,0 +1,85 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Art. 12 Tamper-Evident Audit Log</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1a1d23;--mu:#6b7280;--bd:#e2e5ea;--ac:#2347d9;--ok:#15803d;--bad:#b91c1c;--wn:#b45309}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b21;--tx:#e8eaee;--mu:#98a0ad;--bd:#2a2f38;--ac:#6c8cff;--ok:#4ade80;--bad:#f87171;--wn:#fbbf24}}
+a{color:var(--ac)}*{box-sizing:border-box}body{margin:0;font:14px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--tx)}
+header{padding:18px 24px;border-bottom:1px solid var(--bd);background:var(--card)}h1{margin:0;font-size:20px}header p{margin:2px 0 0;color:var(--mu)}
+main{max-width:1200px;margin:0 auto;padding:16px;display:grid;gap:14px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px;overflow-x:auto}
+h2{margin:0 0 10px;font-size:15px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button,select,input{font:inherit;padding:6px 12px;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--tx)}
+button{cursor:pointer;background:var(--ac);color:#fff;border-color:var(--ac)}button.s{background:var(--card);color:var(--tx);border-color:var(--bd)}button.d{background:var(--bad);border-color:var(--bad)}
+input[type=number]{width:80px}table{border-collapse:collapse;width:100%;font-size:12.5px}th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--bd);vertical-align:top}th{color:var(--mu);font-weight:600}
+code,.mono{font-family:ui-monospace,monospace;font-size:12px}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.stat b{display:block;font-size:20px}.stat span{color:var(--mu);font-size:12px}
+.pill{padding:1px 8px;border-radius:99px;font-size:11px;border:1px solid var(--bd)}.t{color:var(--ok)}.i{color:var(--wn)}
+.res{margin-top:10px;padding:10px;border-radius:8px;border:1px solid var(--bd)}.res.ok{border-color:var(--ok);color:var(--ok)}.res.bad{border-color:var(--bad);color:var(--bad)}
+tr.err td{background:rgba(185,28,28,.12)}.mu{color:var(--mu)}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:800px){.grid2{grid-template-columns:1fr}}
+</style></head><body>
+<header><h1>EU AI Act Art. 12 / 19(1): Tamper-Evident Audit Log</h1>
+<p>Case-study implementation: obligation → requirement → module → test → log evidence. Pilot-stage research prototype, not a compliance certification.</p></header>
+<main>
+<div class="card"><div class="stats" id="stats"></div></div>
+<div class="card"><h2>1. Log events &amp; integrity</h2><div class="row">
+<button onclick="sim()">Simulate 20 events</button><button class="s" onclick="cp()">Checkpoint + anchor</button>
+<button onclick="ver()">Verify integrity</button><span class="mu" id="msg"></span></div><div id="vr"></div></div>
+<div class="card"><h2>2. Attacker simulation (insider with DB access)</h2><div class="row">
+<select id="tk"><option value="modify">modify entry</option><option value="delete">delete entry</option><option value="reorder">reorder with next</option><option value="backdate">backdate timestamp</option><option value="truncate">truncate tail (n entries)</option></select>
+seq/n <input id="ts" type="number" value="5" min="1"><label><input type="checkbox" id="rh"> recompute hashes (no key)</label>
+<button class="d" onclick="tam()">Tamper</button><button class="s" onclick="rest()">Restore backup</button></div>
+<p class="mu">Then click “Verify integrity”. Flagged rows turn red.</p></div>
+<div class="card"><h2>Event log (latest 30)</h2><table id="ev"></table></div>
+<div class="grid2">
+<div class="card"><h2>3. Privacy &amp; retention (Art. 19(1) / GDPR)</h2><div class="row">
+subject <input id="sj" value="user-1" size="10"><button class="s" onclick="shred()">Crypto-shred subject</button>
+<button class="s" onclick="purge(30)">Purge PII &gt;30d</button><button class="s" onclick="purge(200)">Purge PII &gt;200d</button></div>
+<p class="mu">Click a row’s “PII” link to decrypt its payload. After shredding, it is unrecoverable but the chain still verifies. A purge under 183 days is refused (six-month floor).</p><pre class="mono" id="pr"></pre></div>
+<div class="card"><h2>4. Evaluation B: experiments</h2><div class="row"><button class="s" onclick="atk()">Run attack suite</button><button class="s" onclick="bn()">Run benchmark</button></div><div id="ex"></div></div></div>
+<div class="card"><h2>6. Evaluation A: LLM-assisted requirement derivation &amp; trace-link recovery (pilot)</h2>
+<div class="row"><button class="s" onclick="eaRun()">Run harness (heuristic, offline)</button><span class="mu" id="eas"></span></div>
+<p class="mu">Real LLM runs: <code>python scripts/run_eval_a.py --backend anthropic --runs 3</code> (or <code>--backend ollama</code>), then reload this page.</p><div id="eb"></div></div>
+<div class="card"><h2>5. Traceability matrix (builder-authored)</h2><table id="tr"></table>
+<p class="mu">“textual” = entailed by the provision; “interpretive” = engineering choice, not mandated by Art. 12.</p></div>
+</main>
+<script>
+const $=id=>document.getElementById(id),sh=s=>s?s.slice(0,10)+'…':'';
+const api=async(p,m='GET',b)=>{const r=await fetch('/api/'+p,{method:m,headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});return r.json()};
+let bad=new Set();
+async function load(){const i=await api('info');
+ $('stats').innerHTML=[['Events',i.events],['Checkpoints',i.checkpoints],['Anchors',i.anchors],['Retention floor',i.retention_floor_days+' d'],['State',i.tampered?'TAMPERED (demo)':'clean'],['Head hash',sh(i.head_hash)],['Public key',sh(i.pubkey)]].map(([k,v])=>`<div class="stat"><b class="mono" style="${k=='State'&&i.tampered?'color:var(--bad)':''}">${v}</b><span>${k}</span></div>`).join('');
+ const e=await api('events?limit=30');
+ $('ev').innerHTML='<tr><th>seq</th><th>time</th><th>type</th><th>Art. 12 ref</th><th>subject</th><th>entry_hash</th><th>prev_hash</th><th>PII</th></tr>'+e.map(x=>`<tr class="${bad.has(x.seq)?'err':''}"><td>${x.seq}</td><td>${new Date(x.ts*1000).toLocaleTimeString()}</td><td>${x.event_type}</td><td>${x.art12}</td><td>${x.subject}</td><td class="mono">${sh(x.entry_hash)}</td><td class="mono">${sh(x.prev_hash)}</td><td><a href="#" onclick="pii(${x.seq});return false">view</a></td></tr>`).join('')}
+async function sim(){const r=await api('simulate?n=20','POST');$('msg').textContent='added '+r.added;bad=new Set();load()}
+async function cp(){const r=await api('checkpoint','POST');$('msg').textContent=r.root?`checkpoint #${r.id} seq ${r.from}-${r.to}`:r.info;load()}
+async function ver(){const v=await api('verify');bad=new Set(v.issues.map(i=>i.seq).filter(x=>x!=null));
+ const t=[...new Set(v.issues.map(i=>i.type))];
+ $('vr').innerHTML=`<div class="res ${v.ok?'ok':'bad'}">${v.ok?`✔ Integrity verified: ${v.checked} events, chain + signatures + checkpoints + anchors OK (${v.verify_ms} ms)`:`✘ TAMPERING DETECTED (${v.issues.length} issues, ${v.verify_ms} ms): ${t.join(', ')}<br>`+v.issues.slice(0,6).map(i=>`<div class="mono">seq ${i.seq??'-'} · ${i.type} · ${i.detail}</div>`).join('')}</div>`;load()}
+async function tam(){const r=await api('tamper','POST',{kind:$('tk').value,seq:+$('ts').value,n:+$('ts').value,rehash:$('rh').checked});$('msg').textContent=r.detail||'tampered. now verify';load()}
+async function rest(){await api('restore','POST');bad=new Set();$('vr').innerHTML='';$('msg').textContent='restored';load()}
+async function pii(s){const r=await api(`events/${s}/pii`);$('pr').textContent=`seq ${s}: `+JSON.stringify(r)}
+async function shred(){const r=await api('shred/'+encodeURIComponent($('sj').value),'POST');$('pr').textContent=JSON.stringify(r)+'  → now run Verify: chain still valid'}
+async function purge(d){const r=await api('purge?days='+d,'POST');$('pr').textContent=JSON.stringify(r)}
+async function atk(){$('ex').textContent='running…';const a=await api('attacks');
+ $('ex').innerHTML='<table><tr><th>attack</th><th>detected</th><th>detected via</th><th>ms</th></tr>'+a.map(x=>`<tr><td>${x.attack}</td><td style="color:var(--${x.detected==x.attack.startsWith('control')||x.attack.includes('KNOWN')?'wn':'ok'})">${x.detected?'YES':'no'}</td><td class="mono">${x.issues.join(', ')}</td><td>${x.verify_ms}</td></tr>`).join('')+'</table><p class="mu">The last row is a documented limit: events after the latest anchor are not protected against tail truncation. The control row must be “no”.</p>'}
+async function bn(){$('ex').textContent='running (≈5 s)…';const b=await api('bench?n=500');
+ const r=(k,l)=>`<tr><td>${l}</td><td>${b[k].p50_ms}</td><td>${b[k].p95_ms}</td><td>${b[k].p99_ms}</td><td>${b[k].events_per_s??'-'}</td></tr>`;
+ $('ex').innerHTML=`<table><tr><th>mode (n=${b.n})</th><th>p50 ms</th><th>p95</th><th>p99</th><th>events/s</th></tr>${r('no_logging','no logging')}${r('sync','sync (commit per event)')}${r('async','async (enqueue latency)')}</table><p class="mu">Async latency is what the AI system waits on; events/s covers end-to-end persistence (${b.async.persisted} stored). Single machine, SQLite, indicative only.</p>`}
+async function trace(){const t=await api('trace');
+ $('tr').innerHTML='<tr><th>ID</th><th>Provision</th><th>Obligation</th><th>Class</th><th>Requirement</th><th>Module</th><th>Tests</th><th>Evidence</th></tr>'+t.map(x=>`<tr><td>${x.id}</td><td>${x.provision}</td><td>${x.obligation}</td><td><span class="pill ${x.cls=='textual'?'t':'i'}">${x.cls}</span></td><td>${x.requirement}</td><td class="mono">${x.module}</td><td class="mono">${x.tests.join('<br>')}</td><td class="mono">${x.evidence}</td></tr>`).join('')}
+
+const f3=x=>x==null?'-':(+x).toFixed(2);
+async function ea(){const r=await api('evala');if(r.missing){$('eb').textContent='No results yet.';return}
+ const m=r.meta,C=r.conditions,T=r.trace,S=r.stats;
+ let h=`<div class="res ${m.is_llm?'ok':'bad'}">${m.is_llm?`LLM run: ${m.model}, ${m.runs} run(s)/unit, temp 0`:'HEURISTIC rule-based baseline: harness check, NOT LLM results'} · ${m.n_units} obligation units · ${m.n_gold_reqs} gold requirements · prompts ${m.prompt_hash} · gold: ${m.gold_status}</div>`;
+ h+='<h2 style="margin-top:12px">RQ1: requirement derivation (vs gold, keyword-match proxy)</h2><table><tr><th>condition</th><th>gold recall</th><th>precision</th><th>unsupported rate</th><th>reqs/unit</th></tr>'+Object.values(C).map(c=>`<tr><td>${c.label}</td><td>${f3(c.recall.mean)} ±${f3(c.recall.sd)}</td><td>${f3(c.precision.mean)}</td><td>${f3(c.unsupported.mean)}</td><td>${f3(c.n.mean)}</td></tr>`).join('')+'</table>';
+ if(r.schema_c4&&r.schema_c4.xref_f1!=null)h+=`<p class="mu">Schema field accuracy (C4): cross-refs F1 ${f3(r.schema_c4.xref_f1)} · actor ${f3(r.schema_c4.actor_ok)} · temporal ${f3(r.schema_c4.temporal_ok)} · exceptions ${f3(r.schema_c4.exceptions_ok)} · conditions ${f3(r.schema_c4.conditions_ok)}</p>`;
+ h+='<h2 style="margin-top:12px">RQ2: trace-link recovery (gold requirements as input)</h2><table><tr><th>condition</th><th>precision</th><th>recall</th><th>F1 [95% CI]</th><th>traceability completeness</th></tr>'+Object.entries(T).map(([k,v])=>`<tr><td>${k}</td><td>${f3(v.precision)}</td><td>${f3(v.recall)}</td><td>${f3(v.f1)} [${f3(v.f1_ci95[0])}, ${f3(v.f1_ci95[1])}]</td><td>${f3(v.completeness)}</td></tr>`).join('')+'</table>';
+ const st=Object.entries(S).filter(([k])=>k.includes('_vs_')).map(([k,v])=>`${k.replace(/_/g,' ')}: p=${f3(v.p)}, Holm p=${f3(v.p_holm)}`).join('<br>');
+ h+=`<p class="mu">${st}<br>${S.note}</p>`;
+ h+='<h2 style="margin-top:12px">RQ3: recall by text characteristic (exploratory)</h2><table><tr><th>characteristic</th><th>n with / without</th><th>B2 with / without</th><th>C3</th><th>C4</th></tr>'+Object.entries(r.rq3_by_characteristic).map(([k,v])=>`<tr><td>${k}</td><td>${v.n_with} / ${v.n_without}</td>`+['B2','C3','C4'].map(c=>`<td>${f3(v[c].recall_with)} / ${f3(v[c].recall_without)}</td>`).join('')+'</tr>').join('')+'</table>';
+ $('eb').innerHTML=h}
+async function eaRun(){try{await api('evala/run?backend=heuristic&runs=1','POST')}catch(e){}
+ const t=setInterval(async()=>{const s=await api('evala/status');$('eas').textContent=s.state+' '+(s.msg||'')+(s.err?' '+s.err:'');if(s.state!='running'){clearInterval(t);ea()}},700)}
+load();trace();ea();
+</script></body></html>

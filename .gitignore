@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Runtime data (contains signing key, salt, encrypted PII, logs)
+data/
+*.db
+*.bak
+anchors.jsonl
+signing.key
+salt.bin
+
+# Secrets
+.env
+*.key
+.minor
+minor 
+
+# Generated experiment output (remove these lines if you want to commit results)
+results/eval_a_raw.json
+results/rating_*.csv
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

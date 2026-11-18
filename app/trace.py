@@ -1,0 +1,37 @@
+"""Builder-authored traceability matrix: obligation -> requirement -> module -> test -> evidence.
+cls: textual = entailed by provision; interpretive = engineering choice (NOT statutory)."""
+T = [
+ ("O1", "Art. 12(1)", "System technically allows automatic recording of events over its lifetime", "textual",
+  "REQ-01 Events are recorded automatically, without operator action", "app/chain.py::LogStore.append_batch",
+  ["test_append_chain_valid"], "GET /api/events"),
+ ("O2", "Art. 12(2)(a)", "Logs enable identifying risk situations / substantial modifications", "textual",
+  "REQ-02 Event taxonomy includes risk_flag and model_update", "app/chain.py::EVENT_TYPES",
+  ["test_taxonomy_covers_art12"], "GET /api/info (taxonomy)"),
+ ("O3", "Art. 12(2)(b)", "Logs facilitate post-market monitoring", "textual",
+  "REQ-03 Each event carries system_id, model_version, timestamp", "app/chain.py::append_batch (record schema)",
+  ["test_event_fields_present"], "GET /api/events"),
+ ("O4", "Art. 12(2)(c)", "Logs enable monitoring of operation (deployer)", "textual",
+  "REQ-04 Independent verifier lets a deployer/auditor check log integrity", "app/chain.py::LogStore.verify",
+  ["test_verify_clean_chain"], "GET /api/verify"),
+ ("O5", "Art. 12(3)", "Biometric (Annex III 1(a)) minimum content: period, reference DB, matched input, verifiers", "textual",
+  "REQ-05 biometric_match events rejected unless all 12(3) fields present", "app/chain.py::BIOMETRIC_FIELDS",
+  ["test_biometric_event_requires_12_3_fields"], "POST /api/events (validation error)"),
+ ("O6", "Art. 19(1)", "Provider keeps logs at least six months", "textual",
+  "REQ-06 Retention manager refuses purge below 183 days", "app/chain.py::LogStore.purge_pii",
+  ["test_retention_floor"], "POST /api/purge"),
+ ("O7", "Art. 19(1) qualifier", "Retention subject to data-protection law", "textual",
+  "REQ-07 Personal data separable and erasable without breaking the chain (crypto-shredding)", "app/chain.py::shred",
+  ["test_shred_keeps_chain_valid"], "POST /api/shred/{subject}"),
+ ("I1", "Arts. 15/17 (interpretive)", "Integrity of records (not mandated by Art. 12)", "interpretive",
+  "REQ-08 Hash chain + Ed25519 signatures make modification/deletion/reorder/backdating detectable", "app/chain.py::verify",
+  ["test_modify_detected", "test_rehash_forgery_detected", "test_delete_detected", "test_reorder_detected", "test_backdate_detected"],
+  "GET /api/attacks"),
+ ("I2", "Interpretive", "Detect truncation of the log tail", "interpretive",
+  "REQ-09 Signed Merkle checkpoints anchored to an external witness", "app/chain.py::checkpoint",
+  ["test_truncate_detected_by_anchor"], "POST /api/checkpoint"),
+ ("I3", "Interpretive", "Logging must not stall the AI system", "interpretive",
+  "REQ-10 Async bounded buffer with fail-open / fail-closed policy", "app/chain.py::AsyncWriter",
+  ["test_async_writer_flushes_all"], "GET /api/bench"),
+]
+KEYS = ("id", "provision", "obligation", "cls", "requirement", "module", "tests", "evidence")
+def matrix(): return [dict(zip(KEYS, t)) for t in T]

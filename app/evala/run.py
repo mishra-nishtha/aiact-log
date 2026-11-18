@@ -1,0 +1,93 @@
+"""Evaluation A orchestration: B2 (no retrieval) | C3 (retrieval) | C4 (retrieval + schema); trace-link recovery; stats; rating sheet."""
+import csv, json, os, random, time
+from statistics import mean
+from .data import UNITS, DEV_UNITS, GOLD, GOLD_LINKS, INV
+from .llm import make_backend, retrieve, PROMPT_HASH
+from . import metrics as M
+
+CONDS = ("B2", "C3", "C4")
+LABEL = {"B2": "Baseline 2: no retrieval, no schema", "C3": "Condition 3: retrieval", "C4": "Condition 4: retrieval + schema"}
+
+def derive_all(be, units, runs, log):
+    raw = {c: {u["id"]: [] for u in units} for c in CONDS}; bad = 0
+    for c in CONDS:
+        for u in units:
+            ctx = [] if c == "B2" else retrieve(u["text"], 3, exclude={u.get("parent", "")})
+            for r in range(runs):
+                out, ok = be.derive(u["text"], ctx, c == "C4"); bad += not ok
+                raw[c][u["id"]].append({**out, "ok": ok, "ctx": [t for t, _ in ctx]})
+            log(f"derive {c} {u['id']}")
+    return raw, bad
+
+def link_all(be, raw, runs, log):
+    out = {c: {} for c in ("C3", "C4")}; bad = 0
+    for c in out:
+        for u in UNITS:
+            for gid, text, _ in GOLD[u["id"]]:
+                runs_l = []
+                for r in range(runs):
+                    ob = raw["C4"][u["id"]][r].get("obligation") if c == "C4" else None
+                    l, ok = be.link(text, INV, ob); bad += not ok; runs_l.append(l)
+                out[c][gid] = runs_l
+            log(f"link {c} {u['id']}")
+    return out, bad
+
+def run(backend="heuristic", runs=1, model=None, out_dir="results", log=print, dev=False):
+    t0 = time.time(); be = make_backend(backend, model); os.makedirs(out_dir, exist_ok=True)
+    if dev:  # prompt-development check outside Arts. 12/19: format only, no scoring
+        raw, bad = derive_all(be, DEV_UNITS, 1, log)
+        return {"dev": True, "parse_failures": bad, "sample": raw["C4"]}
+    runs = max(1, runs); raw, bad_d = derive_all(be, UNITS, runs, log)
+    res = {"meta": {"backend": be.name, "model": be.model, "runs": runs, "temperature": 0, "prompt_hash": PROMPT_HASH, "date": time.strftime("%Y-%m-%d %H:%M"),
+                    "n_units": len(UNITS), "n_gold_reqs": len(GOLD_LINKS), "is_llm": backend != "heuristic",
+                    "retriever": "tfidf-cosine top-3 (paper design: FAISS + sentence embeddings)", "text_source": "paraphrased provisions",
+                    "gold_status": "author-drafted; independent annotation pending", "parse_failures": bad_d}, "conditions": {}}
+    per = {c: {} for c in CONDS}
+    for c in CONDS:
+        for u in UNITS:
+            sc = [M.score_derive(u, [r["text"] for r in rr["requirements"]]) for rr in raw[c][u["id"]]]
+            per[c][u["id"]] = {k: mean(s[k] for s in sc) for k in ("recall", "precision", "unsupported", "n")}
+        res["conditions"][c] = {"label": LABEL[c], **{k: M.ms([per[c][u["id"]][k] for u in UNITS]) for k in ("recall", "precision", "unsupported", "n")}, "per_unit_recall": {u: round(v["recall"], 3) for u, v in per[c].items()}}
+    sch = [s for u in UNITS for rr in raw["C4"][u["id"]] if (s := M.score_schema(u, rr.get("obligation")))]
+    res["schema_c4"] = {k: round(mean(float(s[k]) for s in sch), 3) for k in ("xref_f1", "actor_ok", "temporal_ok", "exceptions_ok", "conditions_ok")} if sch else {}
+    links, bad_l = link_all(be, raw, runs, log); res["meta"]["parse_failures"] += bad_l; res["trace"] = {}; fullbin = {}
+    for c in links:
+        tup, full = {g: [0, 0, 0] for g in GOLD_LINKS}, {u["id"]: [] for u in UNITS}; runs_prf = []
+        for r in range(runs):
+            tr = []
+            for u in UNITS:
+                pr = {g: links[c][g][r] for g, *_ in GOLD[u["id"]]}; per_g, ok = M.score_links(pr, u["id"]); full[u["id"]].append(ok)
+                for g, t in per_g.items(): tr.append(t); tup[g] = [a + b / runs for a, b in zip(tup[g], t)]
+            runs_prf.append(M.prf(tr))
+        tl = [tuple(v) for v in tup.values()]
+        fullbin[c] = {u: mean(v) >= 0.5 for u, v in full.items()}
+        res["trace"][c] = {**{k: round(mean(p[k] for p in runs_prf), 3) for k in ("precision", "recall", "f1")}, "f1_ci95": [round(x, 3) for x in M.bootstrap_f1(tl)],
+                           "completeness": round(mean(fullbin[c].values()), 3), "per_unit_full_chain": fullbin[c]}
+    ids = [u["id"] for u in UNITS]; rc = lambda c: [per[c][i]["recall"] for i in ids]
+    w1, w2 = M.wilcoxon(rc("C3"), rc("B2")), M.wilcoxon(rc("C4"), rc("C3")); mc = M.mcnemar([fullbin["C3"][i] for i in ids], [fullbin["C4"][i] for i in ids])
+    adj = M.holm([w1["p"], mc["p"], w2["p"]])
+    res["stats"] = {"note": "exploratory; n=14 non-independent units; Holm-adjusted over 3 tests",
+                    "RQ1_retrieval_B2_vs_C3_recall_wilcoxon": {**w1, "p_holm": adj[0]}, "RQ2_schema_C3_vs_C4_completeness_mcnemar": {**mc, "p_holm": adj[1]},
+                    "extra_C3_vs_C4_recall_wilcoxon": {**w2, "p_holm": adj[2]},
+                    "expert_gap_C4": {"recall_gap_to_gold": round(1 - res["conditions"]["C4"]["recall"]["mean"], 3), "note": "gold = maximum score; expert output is not separately rated"}}
+    rq3 = {}
+    for fl in ("crossref", "exception", "implicit_actor", "temporal", "condition"):
+        w, wo = [u["id"] for u in UNITS if u["flags"][fl]], [u["id"] for u in UNITS if not u["flags"][fl]]
+        rq3[fl] = {"n_with": len(w), "n_without": len(wo), **{c: {"recall_with": round(mean(per[c][i]["recall"] for i in w), 3) if w else None, "recall_without": round(mean(per[c][i]["recall"] for i in wo), 3) if wo else None} for c in CONDS}}
+    res["rq3_by_characteristic"] = rq3
+    miss = []
+    for c in CONDS:
+        for u in UNITS:
+            if per[c][u["id"]]["recall"] < 1: miss.append({"cond": c, "unit": u["id"], "recall": round(per[c][u["id"]]["recall"], 2), "unsupported": round(per[c][u["id"]]["unsupported"], 2)})
+    res["failures"] = miss; res["meta"]["seconds"] = round(time.time() - t0, 1)
+    json.dump(res, open(os.path.join(out_dir, "eval_a.json"), "w", encoding="utf-8"), indent=2)
+    json.dump({"raw": raw, "links": links}, open(os.path.join(out_dir, "eval_a_raw.json"), "w", encoding="utf-8"), indent=1)
+    export_rating_sheet(raw, out_dir); return res
+
+def export_rating_sheet(raw, out_dir):
+    items = [(c, u["id"], u["text"], r["text"]) for c in CONDS for u in UNITS for r in raw[c][u["id"]][0]["requirements"]]
+    random.Random(11).shuffle(items); key = {}
+    with open(os.path.join(out_dir, "rating_sheet.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f); w.writerow(["item_id", "provision_unit_text", "requirement", "correctness_1to5", "completeness_1to5", "clarity_1to5", "grounded_Y_N"])
+        for n, (c, uid, ut, rt) in enumerate(items, 1): w.writerow([f"R{n:03d}", ut, rt, "", "", "", ""]); key[f"R{n:03d}"] = {"cond": c, "unit": uid}
+    json.dump(key, open(os.path.join(out_dir, "rating_key.json"), "w"), indent=1)

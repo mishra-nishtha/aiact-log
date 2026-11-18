@@ -1,0 +1,69 @@
+[
+  {
+    "attack": "control (no tampering)",
+    "detected": false,
+    "issues": [],
+    "verify_ms": 34.55
+  },
+  {
+    "attack": "modify an entry",
+    "detected": true,
+    "issues": [
+      "hash_mismatch"
+    ],
+    "verify_ms": 49.75
+  },
+  {
+    "attack": "modify + recompute hash chain (no key)",
+    "detected": true,
+    "issues": [
+      "anchor_mismatch",
+      "bad_signature",
+      "checkpoint_root_mismatch"
+    ],
+    "verify_ms": 29.02
+  },
+  {
+    "attack": "delete an entry",
+    "detected": true,
+    "issues": [
+      "chain_break",
+      "checkpoint_root_mismatch",
+      "sequence_gap"
+    ],
+    "verify_ms": 30.0
+  },
+  {
+    "attack": "reorder two entries",
+    "detected": true,
+    "issues": [
+      "chain_break",
+      "checkpoint_root_mismatch",
+      "hash_mismatch"
+    ],
+    "verify_ms": 34.97
+  },
+  {
+    "attack": "backdate a timestamp",
+    "detected": true,
+    "issues": [
+      "hash_mismatch"
+    ],
+    "verify_ms": 33.98
+  },
+  {
+    "attack": "truncate tail (covered by anchor)",
+    "detected": true,
+    "issues": [
+      "checkpoint_root_mismatch",
+      "tail_truncated"
+    ],
+    "verify_ms": 35.06
+  },
+  {
+    "attack": "truncate tail after last anchor (KNOWN LIMIT)",
+    "detected": false,
+    "issues": [],
+    "verify_ms": 42.07
+  }
+]
