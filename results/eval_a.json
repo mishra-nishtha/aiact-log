@@ -1,0 +1,381 @@
+{
+  "meta": {
+    "backend": "heuristic",
+    "model": "rule-based",
+    "runs": 1,
+    "temperature": 0,
+    "prompt_hash": "fec06853339d",
+    "date": "2026-11-19 01:50",
+    "n_units": 14,
+    "n_clusters": 4,
+    "n_gold_reqs": 15,
+    "is_llm": false,
+    "retriever": "tfidf-cosine top-3 (paper design: FAISS + sentence embeddings)",
+    "text_source": "paraphrased provisions",
+    "gold_status": "author-drafted; independent annotation pending",
+    "parse_failures": 0,
+    "parse_failure_rate": 0.0,
+    "api_errors": 0,
+    "seconds": 0.2
+  },
+  "conditions": {
+    "B2": {
+      "label": "Baseline 2: no retrieval, no schema",
+      "recall": {
+        "mean": 0.786,
+        "sd": 0.426
+      },
+      "precision": {
+        "mean": 0.75,
+        "sd": 0.427
+      },
+      "unsupported": {
+        "mean": 0,
+        "sd": 0.0
+      },
+      "n": {
+        "mean": 1.143,
+        "sd": 0.363
+      },
+      "per_unit_recall": {
+        "U01": 1,
+        "U02": 1,
+        "U03": 0,
+        "U04": 1,
+        "U05": 0,
+        "U06": 0,
+        "U07": 1,
+        "U08": 1,
+        "U09": 1,
+        "U10": 1,
+        "U11": 1,
+        "U12": 1,
+        "U13": 1,
+        "U14": 1
+      }
+    },
+    "C3": {
+      "label": "Condition 3: retrieval",
+      "recall": {
+        "mean": 0.786,
+        "sd": 0.426
+      },
+      "precision": {
+        "mean": 0.75,
+        "sd": 0.427
+      },
+      "unsupported": {
+        "mean": 0.107,
+        "sd": 0.289
+      },
+      "n": {
+        "mean": 1.143,
+        "sd": 0.363
+      },
+      "per_unit_recall": {
+        "U01": 1,
+        "U02": 1,
+        "U03": 0,
+        "U04": 1,
+        "U05": 0,
+        "U06": 0,
+        "U07": 1,
+        "U08": 1,
+        "U09": 1,
+        "U10": 1,
+        "U11": 1,
+        "U12": 1,
+        "U13": 1,
+        "U14": 1
+      }
+    },
+    "C4": {
+      "label": "Condition 4: retrieval + schema",
+      "recall": {
+        "mean": 0.786,
+        "sd": 0.426
+      },
+      "precision": {
+        "mean": 0.75,
+        "sd": 0.427
+      },
+      "unsupported": {
+        "mean": 0.107,
+        "sd": 0.289
+      },
+      "n": {
+        "mean": 1.143,
+        "sd": 0.363
+      },
+      "per_unit_recall": {
+        "U01": 1,
+        "U02": 1,
+        "U03": 0,
+        "U04": 1,
+        "U05": 0,
+        "U06": 0,
+        "U07": 1,
+        "U08": 1,
+        "U09": 1,
+        "U10": 1,
+        "U11": 1,
+        "U12": 1,
+        "U13": 1,
+        "U14": 1
+      }
+    }
+  },
+  "schema_c4": {
+    "xref_f1": 1.0,
+    "actor_ok": 1.0,
+    "temporal_ok": 1.0,
+    "exceptions_ok": 1.0,
+    "conditions_ok": 0.929
+  },
+  "trace": {
+    "C3": {
+      "precision": 0.651,
+      "recall": 0.622,
+      "f1": 0.636,
+      "f1_ci95": [
+        0.5,
+        0.795
+      ],
+      "completeness": 0.286,
+      "per_unit_full_chain": {
+        "U01": false,
+        "U02": false,
+        "U03": true,
+        "U04": false,
+        "U05": false,
+        "U06": true,
+        "U07": false,
+        "U08": false,
+        "U09": false,
+        "U10": false,
+        "U11": false,
+        "U12": false,
+        "U13": true,
+        "U14": true
+      }
+    },
+    "C4": {
+      "precision": 0.455,
+      "recall": 0.444,
+      "f1": 0.449,
+      "f1_ci95": [
+        0.276,
+        0.629
+      ],
+      "completeness": 0.214,
+      "per_unit_full_chain": {
+        "U01": false,
+        "U02": false,
+        "U03": true,
+        "U04": false,
+        "U05": false,
+        "U06": false,
+        "U07": false,
+        "U08": false,
+        "U09": false,
+        "U10": false,
+        "U11": false,
+        "U12": false,
+        "U13": true,
+        "U14": true
+      }
+    }
+  },
+  "stats": {
+    "note": "exploratory; n=14 non-independent units in 4 clusters; Holm-adjusted over 3 tests",
+    "RQ1_retrieval_B2_vs_C3_recall_wilcoxon": {
+      "p": 1.0,
+      "n": 0,
+      "r": 0.0,
+      "p_holm": 1.0
+    },
+    "RQ2_schema_C3_vs_C4_completeness_mcnemar": {
+      "p": 1.0,
+      "b": 1,
+      "c": 0,
+      "p_holm": 1.0
+    },
+    "extra_C3_vs_C4_recall_wilcoxon": {
+      "p": 1.0,
+      "n": 0,
+      "r": 0.0,
+      "p_holm": 1.0
+    },
+    "cluster_analysis": {
+      "note": "paper \u00a713.2: Wilcoxon only valid with >=8 clusters; below that use these cluster-level estimates",
+      "n_clusters": 4,
+      "wilcoxon_valid_per_paper": false,
+      "C3_minus_B2_recall": {
+        "clusters": 4,
+        "mean_diff": 0.0,
+        "cluster_boot_ci95": [
+          0.0,
+          0.0
+        ],
+        "leave_one_cluster_out": [
+          0.0,
+          0.0
+        ]
+      },
+      "C4_minus_C3_recall": {
+        "clusters": 4,
+        "mean_diff": 0.0,
+        "cluster_boot_ci95": [
+          0.0,
+          0.0
+        ],
+        "leave_one_cluster_out": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "expert_gap_C4": {
+      "recall_gap_to_gold": 0.214,
+      "note": "gold = maximum score; expert output is not separately rated"
+    }
+  },
+  "rq3_by_characteristic": {
+    "crossref": {
+      "n_with": 8,
+      "n_without": 6,
+      "B2": {
+        "recall_with": 0.75,
+        "recall_without": 0.833
+      },
+      "C3": {
+        "recall_with": 0.75,
+        "recall_without": 0.833
+      },
+      "C4": {
+        "recall_with": 0.75,
+        "recall_without": 0.833
+      }
+    },
+    "exception": {
+      "n_with": 1,
+      "n_without": 13,
+      "B2": {
+        "recall_with": 1,
+        "recall_without": 0.769
+      },
+      "C3": {
+        "recall_with": 1,
+        "recall_without": 0.769
+      },
+      "C4": {
+        "recall_with": 1,
+        "recall_without": 0.769
+      }
+    },
+    "implicit_actor": {
+      "n_with": 13,
+      "n_without": 1,
+      "B2": {
+        "recall_with": 0.769,
+        "recall_without": 1
+      },
+      "C3": {
+        "recall_with": 0.769,
+        "recall_without": 1
+      },
+      "C4": {
+        "recall_with": 0.769,
+        "recall_without": 1
+      }
+    },
+    "temporal": {
+      "n_with": 3,
+      "n_without": 11,
+      "B2": {
+        "recall_with": 1,
+        "recall_without": 0.727
+      },
+      "C3": {
+        "recall_with": 1,
+        "recall_without": 0.727
+      },
+      "C4": {
+        "recall_with": 1,
+        "recall_without": 0.727
+      }
+    },
+    "condition": {
+      "n_with": 6,
+      "n_without": 8,
+      "B2": {
+        "recall_with": 0.833,
+        "recall_without": 0.75
+      },
+      "C3": {
+        "recall_with": 0.833,
+        "recall_without": 0.75
+      },
+      "C4": {
+        "recall_with": 0.833,
+        "recall_without": 0.75
+      }
+    }
+  },
+  "failures": [
+    {
+      "cond": "B2",
+      "unit": "U03",
+      "recall": 0,
+      "unsupported": 0
+    },
+    {
+      "cond": "B2",
+      "unit": "U05",
+      "recall": 0,
+      "unsupported": 0
+    },
+    {
+      "cond": "B2",
+      "unit": "U06",
+      "recall": 0,
+      "unsupported": 0
+    },
+    {
+      "cond": "C3",
+      "unit": "U03",
+      "recall": 0,
+      "unsupported": 0
+    },
+    {
+      "cond": "C3",
+      "unit": "U05",
+      "recall": 0,
+      "unsupported": 0
+    },
+    {
+      "cond": "C3",
+      "unit": "U06",
+      "recall": 0,
+      "unsupported": 0
+    },
+    {
+      "cond": "C4",
+      "unit": "U03",
+      "recall": 0,
+      "unsupported": 0
+    },
+    {
+      "cond": "C4",
+      "unit": "U05",
+      "recall": 0,
+      "unsupported": 0
+    },
+    {
+      "cond": "C4",
+      "unit": "U06",
+      "recall": 0,
+      "unsupported": 0
+    }
+  ]
+}

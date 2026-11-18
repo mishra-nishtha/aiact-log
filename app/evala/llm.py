@@ -1,6 +1,14 @@
-"""Retrieval, prompts and backends (heuristic baseline | anthropic | ollama)."""
-import json, os, re, math, time, hashlib, urllib.request, urllib.error
+"""Retrieval, prompts and backends (heuristic baseline | groq | anthropic | ollama)."""
+import hashlib
+import json
+import math
+import os
+import re
+import time
+import urllib.error
+import urllib.request
 from collections import Counter
+
 from .data import CORPUS
 
 STOP = set("the a an of to and or in for is are be shall that this with by on as at from it its which any each such than not may".split())
@@ -41,9 +49,9 @@ def p_link(req, inv, oblig):
     s = f"Requirement:\n{req}\n"
     if oblig: s += "\nObligation (structured):\n" + json.dumps(oblig) + "\n"
     s += "\nArtifact inventory:\n" + "\n".join(f"{k}: {v}" for k, v in inv.items())
-    s += '\n\nSelect the artifacts that implement (C*), verify (T*) or evidence (E*) this requirement. Return JSON: {"links":["C1","T01","E1"]}'
+    s += '\n\nSelect the artifacts that implement (CTL*), verify (TST*) or evidence (EVD*) this requirement. Return JSON: {"links":["CTL1","TST01","EVD1"]}'
     return s
-PROMPT_HASH = hashlib.sha256((SYS + p_derive("x", [("a", "b")], True) + p_derive("x", [], False) + p_link("r", {"C1": "d"}, {"a": 1})).encode()).hexdigest()[:12]
+PROMPT_HASH = hashlib.sha256((SYS + p_derive("x", [("a", "b")], True) + p_derive("x", [], False) + p_link("r", {"CTL1": "d"}, {"a": 1})).encode()).hexdigest()[:12]
 
 def extract_json(t):
     if not t: return None
@@ -57,6 +65,7 @@ def extract_json(t):
 class Heuristic:
     """Non-LLM rule-based baseline: sanity check of the evaluation harness. Its numbers are NOT LLM results."""
     name, model = "heuristic", "rule-based"
+    errors = 0
     def derive(self, text, ctx, schema):
         reqs = []
         for c in self._clauses(text):
@@ -81,46 +90,70 @@ class Heuristic:
         q = req + (" " + json.dumps(oblig) if oblig else "")
         best = {}
         for i, s in TfIdf(inv).rank(q):
-            if s > 0.04 and i[0] not in best: best[i[0]] = i
+            if s > 0.04 and i[0] not in best: best[i[0]] = i  # best-scoring artifact per type (C/T/E)
         return list(best.values()), True
 
 class LLM:
+    DEFAULTS = {"anthropic": "claude-sonnet-5-5", "groq": "llama-3.3-70b-versatile", "ollama": "llama3.1"}
+
     def __init__(self, kind, model=None):
+        if kind not in self.DEFAULTS: raise ValueError(f"unknown backend {kind!r}")
         self.kind, self.name = kind, kind
-        self.model = model or os.environ.get("LLM_MODEL") or ("claude-sonnet-5-5" if kind == "anthropic" else "llama3.1")
+        self.model = model or os.environ.get("LLM_MODEL") or self.DEFAULTS[kind]
         self.temp_ok = True; self.errors = 0
-        if kind == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"): raise SystemExit("Set ANTHROPIC_API_KEY (or use --backend heuristic|ollama)")
+        if kind == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
+            raise SystemExit("Set ANTHROPIC_API_KEY (or use --backend groq|heuristic|ollama)")
+        if kind == "groq" and not os.environ.get("GROQ_API_KEY"):
+            raise SystemExit("Set GROQ_API_KEY in .env (or use --backend heuristic|ollama)")
+
     def _post(self, url, headers, payload):
-        for attempt in range(4):
+        for attempt in range(6):
             try:
                 req = urllib.request.Request(url, json.dumps(payload).encode(), headers)
                 with urllib.request.urlopen(req, timeout=180) as r: return json.loads(r.read())
             except urllib.error.HTTPError as e:
                 body = e.read().decode("utf8", "ignore")
-                if e.code == 400 and "temperature" in body and "temperature" in payload: payload.pop("temperature"); self.temp_ok = False; continue
-                if e.code in (429, 500, 502, 503, 529): time.sleep(2 ** attempt * 2); continue
+                if e.code == 400 and "temperature" in body and "temperature" in payload:
+                    payload.pop("temperature"); self.temp_ok = False; continue
+                if e.code == 400 and "response_format" in body and "response_format" in payload:
+                    payload.pop("response_format"); continue
+                if e.code in (429, 500, 502, 503, 529):
+                    try: wait = float(e.headers.get("retry-after", ""))
+                    except (TypeError, ValueError): wait = 2 ** attempt * 2
+                    time.sleep(min(max(wait, 1), 60)); continue
                 raise RuntimeError(f"HTTP {e.code}: {body[:300]}")
-            except urllib.error.URLError: time.sleep(2 ** attempt)
+            except (urllib.error.URLError, TimeoutError): time.sleep(2 ** attempt)
         raise RuntimeError("LLM request failed after retries")
+
     def _complete(self, user):
         if self.kind == "anthropic":
-            r = self._post(os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com") + "/v1/messages",
+            base = os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
+            r = self._post(base + "/v1/messages",
                            {"x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01", "content-type": "application/json"},
                            {"model": self.model, "max_tokens": 2000, "temperature": 0, "system": SYS, "messages": [{"role": "user", "content": user}]})
             return "".join(b.get("text", "") for b in r["content"])
+        if self.kind == "groq":  # OpenAI-compatible endpoint
+            r = self._post("https://api.groq.com/openai/v1/chat/completions",
+                           {"Authorization": "Bearer " + os.environ["GROQ_API_KEY"], "content-type": "application/json",
+                            "User-Agent": "aiact-log/1.0"},  # the default Python-urllib agent can be blocked with HTTP 403
+                           {"model": self.model, "temperature": 0, "max_tokens": 2000,
+                            "response_format": {"type": "json_object"},
+                            "messages": [{"role": "system", "content": SYS}, {"role": "user", "content": user}]})
+            return r["choices"][0]["message"].get("content") or ""
         r = self._post("http://localhost:11434/api/chat", {"content-type": "application/json"},
                        {"model": self.model, "stream": False, "format": "json", "options": {"temperature": 0},
                         "messages": [{"role": "system", "content": SYS}, {"role": "user", "content": user}]})
         return r["message"]["content"]
+
     def derive(self, text, ctx, schema):
         j = extract_json(self._try(p_derive(text, ctx, schema)))
-        if not j or not isinstance(j.get("requirements"), list): return {"requirements": []}, False
-        j["requirements"] = [r for r in j["requirements"] if isinstance(r, dict) and r.get("text")]
+        if not isinstance(j, dict) or not isinstance(j.get("requirements"), list): return {"requirements": []}, False
+        j["requirements"] = [r for r in j["requirements"] if isinstance(r, dict) and isinstance(r.get("text"), str) and r["text"].strip()]
         return j, True
     def link(self, req, inv, oblig):
         j = extract_json(self._try(p_link(req, inv, oblig)))
-        if not j or not isinstance(j.get("links"), list): return [], False
-        return [x for x in j["links"] if x in inv], True
+        if not isinstance(j, dict) or not isinstance(j.get("links"), list): return [], False
+        return list(dict.fromkeys(x for x in j["links"] if isinstance(x, str) and x in inv)), True
     def _try(self, u):
         try: return self._complete(u)
         except Exception as e: self.errors += 1; print("LLM error:", e); return ""

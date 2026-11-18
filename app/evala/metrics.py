@@ -1,11 +1,17 @@
-import re, math, random, itertools
-from statistics import mean, pstdev
-from .data import UNITS, GOLD, GOLD_LINKS, CORPUS
+import itertools
+import math
+import random
+import re
+from statistics import mean, stdev
+
+from .data import CORPUS, GOLD, GOLD_LINKS, UNITS
 from .llm import toks
 
 MATCH_T, GROUND_T = 0.6, 0.5
 def keycov(text, keys):
-    t = text.lower(); return sum(any(a in t for a in k.split("|")) for k in keys) / len(keys)
+    """Share of key-term groups present. Alternatives match as WORD PREFIXES (\\brecord matches 'recorded', not 'catalog')."""
+    t = text.lower()
+    return sum(any(re.search(r"\b" + re.escape(a), t) for a in k.split("|")) for k in keys) / len(keys)
 def unit_ref_text(u): return " ".join([u["text"]] + [CORPUS[r][1] for r in u["refs"]])
 def ground(text, u):
     w = [x for x in toks(text) if len(x) > 3]; ref = set(toks(unit_ref_text(u)))
@@ -22,8 +28,8 @@ def norm_refs(items):
     out = set()
     for s in items or []:
         s = str(s).lower()
-        for m in re.finditer(r"(?:article|art\.?)\s*(\d+)(?:\s*\((\d+)\))?", s): out.add(f"A{m.group(1)}" + (f"({m.group(2)})" if m.group(2) else ""))
-        for m in re.finditer(r"annex\s+([ivx]+)", s): out.add("ANX" + m.group(1).upper())
+        for m in re.finditer(r"\b(?:article|art\.?)\s*(\d+)(?:\s*\((\d+)\))?", s): out.add(f"A{m.group(1)}" + (f"({m.group(2)})" if m.group(2) else ""))
+        for m in re.finditer(r"\bannex\s+([ivx]+)\b", s): out.add("ANX" + m.group(1).upper())
     return out
 def f1(p, g):
     if not p and not g: return 1.0
@@ -38,12 +44,13 @@ def score_schema(u, ob):
             "conditions_ok": bool(ob.get("conditions")) == u["conditions"]}
 
 def score_links(pred, unit_id):
-    """pred: {gold_id: [artifact ids]} -> per-gold (tp,fp,fn) and full-chain flag for the unit."""
-    per, cover = {}, set()
+    """pred: {gold_id: [artifact ids]} -> per-gold (tp,fp,fn) and a full-chain flag.
+    Full chain = EVERY gold requirement of the unit has ALL of its reference links recovered."""
+    per = {}
     for gid, *_ in GOLD[unit_id]:
         G, P = set(GOLD_LINKS[gid]), set(pred.get(gid, []))
-        per[gid] = (len(G & P), len(P - G), len(G - P)); cover |= {x[0] for x in G & P}
-    return per, {"C", "T", "E"} <= cover
+        per[gid] = (len(G & P), len(P - G), len(G - P))
+    return per, all(t[2] == 0 for t in per.values())
 
 def prf(tuples):
     tp, fp, fn = (sum(t[i] for t in tuples) for i in range(3))
@@ -84,4 +91,38 @@ def holm(ps):
     for rank, i in enumerate(idx):
         run = max(run, min(1.0, (len(ps) - rank) * ps[i])); out[i] = run
     return out
-def ms(xs): return {"mean": round(mean(xs), 3), "sd": round(pstdev(xs), 3)} if xs else {"mean": 0, "sd": 0}
+def ms(xs): return {"mean": round(mean(xs), 3), "sd": round(stdev(xs), 3) if len(xs) > 1 else 0} if xs else {"mean": 0, "sd": 0}
+
+def cluster_stats(x, y, groups, n=2000, seed=7):
+    """Paper §13.2 for <8 clusters: cluster-bootstrap CI of the mean paired difference + leave-one-cluster-out range."""
+    d = [a - b for a, b in zip(x, y)]; by = {}
+    for g, v in zip(groups, d): by.setdefault(g, []).append(v)
+    keys = list(by)
+    def m(ks):
+        vals = [v for k in ks for v in by[k]]; return sum(vals) / len(vals)
+    rnd = random.Random(seed)
+    boots = sorted(m([rnd.choice(keys) for _ in keys]) for _ in range(n))
+    loco = [m([k for k in keys if k != o]) for o in keys] if len(keys) > 1 else []
+    return {"clusters": len(keys), "mean_diff": round(m(keys), 3),
+            "cluster_boot_ci95": [round(boots[int(.025 * n)], 3), round(boots[min(n - 1, int(.975 * n))], 3)],
+            "leave_one_cluster_out": [round(min(loco), 3), round(max(loco), 3)] if loco else None}
+
+def krippendorff_alpha_ordinal(units, cats=(1, 2, 3, 4, 5)):
+    """units: list of per-item rating lists (one value per rater). Ordinal metric, paper target alpha >= 0.70."""
+    o = {}
+    for vals in units:
+        m = len(vals)
+        if m < 2: continue
+        for i, a in enumerate(vals):
+            for j, b in enumerate(vals):
+                if i != j: o[(a, b)] = o.get((a, b), 0) + 1 / (m - 1)
+    nc = {c: sum(o.get((c, k), 0) for k in cats) for c in cats}; n = sum(nc.values())
+    if n <= 1: return float("nan")
+    def d2(c, k):
+        if c == k: return 0.0
+        lo, hi = (c, k) if c < k else (k, c)
+        s = sum(nc[g] for g in cats if lo <= g <= hi) - (nc[lo] + nc[hi]) / 2
+        return s * s
+    do = sum(o.get((c, k), 0) * d2(c, k) for c in cats for k in cats) / n
+    de = sum(nc[c] * nc[k] * d2(c, k) for c in cats for k in cats) / (n * (n - 1))
+    return 1 - do / de if de else float("nan")

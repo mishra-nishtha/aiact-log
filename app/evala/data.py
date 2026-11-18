@@ -1,6 +1,10 @@
 """Evaluation-A data. NOTE: provision texts are PARAPHRASES of Regulation (EU) 2024/1689 (verify wording
 against EUR-Lex before submission). Gold standard is AUTHOR-DRAFTED, pending independent annotation.
-Artifact inventory describes THIS implementation (real components / tests / endpoints)."""
+Artifact inventory describes THIS implementation (real components / tests / endpoints).
+Artifact id namespaces: controls CTL<n>, tests TST<nn>, evidence EVD<n> (first letter = type C/T/E);
+these cannot collide with condition labels (B2/C3/C4) or the paper's attack experiments (E1-E11)."""
+import re
+
 CORPUS = {  # id: (title, text)
  "A12_1": ("Art. 12(1)", "High-risk AI systems shall technically allow for the automatic recording of events (logs) over the lifetime of the system."),
  "A12_2": ("Art. 12(2)", "In order to ensure a level of traceability of the functioning of a high-risk AI system that is appropriate to the intended purpose of the system, logging capabilities shall enable the recording of events relevant for: (a) identifying situations that may result in the system presenting a risk within the meaning of Article 79(1) or in a substantial modification; (b) facilitating the post-market monitoring referred to in Article 72; and (c) monitoring the operation of high-risk AI systems referred to in Article 26(5)."),
@@ -38,7 +42,7 @@ DEV_UNITS = [  # prompt-development set, OUTSIDE Arts. 12/19 (paraphrased)
  dict(id="D1", parent="-", text="High-risk AI systems shall be designed and developed so that their operation is sufficiently transparent to enable deployers to interpret a system's output and use it appropriately.", refs=[]),
  dict(id="D2", parent="-", text="High-risk AI systems shall be designed so that they can be effectively overseen by natural persons during the period in which they are in use.", refs=[]),
 ]
-# gold requirements: unit -> [(id, text, key-term groups; '|' = alternatives)]
+# gold requirements: unit -> [(id, text, key-term groups; '|' = alternatives, matched as word-prefixes)]
 GOLD = {
  "U01": [("G01", "The system shall record events automatically, without manual operator action.", ["automatic", "record|log", "event"])],
  "U02": [("G02", "Event recording shall remain available for the whole lifetime of the system.", ["lifetime|life cycle|lifecycle|throughout|entire", "record|log"])],
@@ -56,32 +60,60 @@ GOLD = {
  "U13": [("G13", "Logs shall not be deleted before a minimum retention of six months.", ["six months|6 months|183|180", "delet|purg|remov|retain|kept|keep|retention|minimum"])],
  "U14": [("G14", "Retention shall yield to applicable data-protection law, including erasure of personal data where required.", ["data protection|gdpr|personal data|privacy", "erasure|erase|delet|anonymi|shred|override|prevail|exception|unless|otherwise"])],
 }
-GOLD_LINKS = {"G01": ["C1","T01","E1"], "G02": ["C1","T01","E2"], "G03": ["C2","T03","E2"], "G04": ["C2","T03","E1"], "G05": ["C1","T04","E1"],
- "G06a": ["C11","T04","E1"], "G06b": ["C4","T02","E3"], "G07": ["C3","T05","E9"], "G08": ["C3","T05","E9"], "G09": ["C3","T05","E9"],
- "G10": ["C3","T05","E9"], "G11": ["C1","T01","E1"], "G12": ["C5","T06","E4"], "G13": ["C5","T06","E4"], "G14": ["C6","T07","E5"]}
+GOLD_LINKS = {"G01": ["CTL1","TST01","EVD1"], "G02": ["CTL1","TST01","EVD2"], "G03": ["CTL2","TST03","EVD2"], "G04": ["CTL2","TST03","EVD1"], "G05": ["CTL1","TST04","EVD1"],
+ "G06a": ["CTL11","TST04","EVD1"], "G06b": ["CTL4","TST02","EVD3"], "G07": ["CTL3","TST05","EVD9"], "G08": ["CTL3","TST05","EVD9"], "G09": ["CTL3","TST05","EVD9"],
+ "G10": ["CTL3","TST05","EVD9"], "G11": ["CTL1","TST01","EVD1"], "G12": ["CTL5","TST06","EVD4"], "G13": ["CTL5","TST06","EVD4"], "G14": ["CTL6","TST07","EVD5"]}
 TESTS = ["test_append_chain_valid","test_verify_clean_chain","test_taxonomy_covers_art12","test_event_fields_present","test_biometric_event_requires_12_3_fields",
  "test_retention_floor","test_shred_keeps_chain_valid","test_modify_detected","test_rehash_forgery_detected","test_delete_detected","test_reorder_detected",
  "test_backdate_detected","test_truncate_detected_by_anchor","test_restore_after_tamper","test_async_writer_flushes_all"]
 INV = {
- "C1": "LogStore.append_batch: automatically records every event with timestamp, system id, model version, hash chain and signature",
- "C2": "EVENT_TYPES: event taxonomy of event classes (inference, risk_flag, model_update, pmm_signal, operator_action, human_override, biometric_match) mapped to Article 12 purposes",
- "C3": "BIOMETRIC_FIELDS validation: biometric match events must record session start and end time, reference database, matched input reference and verifier identities",
- "C4": "LogStore.verify: integrity verification of hash chain, signatures, checkpoints and anchors for auditors and deployers",
- "C5": "LogStore.purge_pii: retention manager that refuses deletion before the 183 day (six month) minimum retention period",
- "C6": "LogStore.shred: per-subject key deletion (crypto-shredding) to erase personal data while the chain stays valid",
- "C7": "AsyncWriter: bounded asynchronous buffer writing events in batches with fail-open or fail-closed policy",
- "C8": "LogStore.checkpoint: signed Merkle root checkpoint anchored to an external witness to detect tail truncation",
- "C9": "LogStore.tamper / restore: attack simulation helpers for demonstration only",
- "C10": "LogStore.read_pii: decrypts the personal payload of an event for an authorised reader",
- "C11": "LogStore.list: retrieval of logged events for deployers and monitoring",
+ "CTL1": "LogStore.append_batch: automatically records every event with timestamp, system id, model version, hash chain and signature",
+ "CTL2": "EVENT_TYPES: event taxonomy of event classes (inference, risk_flag, model_update, pmm_signal, operator_action, human_override, biometric_match) mapped to Article 12 purposes",
+ "CTL3": "BIOMETRIC_FIELDS validation: biometric match events must record session start and end time, reference database, matched input reference and verifier identities",
+ "CTL4": "LogStore.verify: integrity verification of hash chain, signatures, checkpoints and anchors for auditors and deployers",
+ "CTL5": "LogStore.purge_pii: retention manager that refuses deletion before the 183 day (six month) minimum retention period",
+ "CTL6": "LogStore.shred: per-subject key deletion (crypto-shredding) to erase personal data while the chain stays valid",
+ "CTL7": "AsyncWriter: bounded asynchronous buffer writing events in batches with fail-open or fail-closed policy",
+ "CTL8": "LogStore.checkpoint: signed Merkle root checkpoint anchored to an external witness to detect tail truncation",
+ "CTL9": "LogStore.tamper / restore: attack simulation helpers for demonstration only",
+ "CTL10": "LogStore.read_pii: decrypts the personal payload of an event for an authorised reader",
+ "CTL11": "LogStore.list: retrieval of logged events for deployers and monitoring",
 }
-_T = {"T01":"appending events produces a valid chain of recorded events","T02":"verification of an untouched log reports ok","T03":"event taxonomy covers the Article 12 event classes",
- "T04":"each event carries system id, model version, timestamp and hashes","T05":"biometric events lacking Article 12(3) fields are rejected","T06":"purge below the six month retention floor is refused",
- "T07":"shredding a subject makes personal data unrecoverable while the chain verifies","T08":"modified entry is detected","T09":"forged hash chain without key is detected by signature",
- "T10":"deleted entry is detected","T11":"reordered entries are detected","T12":"backdated timestamp is detected","T13":"truncated tail is detected by anchor",
- "T14":"restore after tamper","T15":"asynchronous writer persists all events"}
-INV.update({k: "TEST " + TESTS[int(k[1:]) - 1] + ": " + v for k, v in _T.items()})
-_E = {"E1":"GET /api/events: list recorded log events","E2":"GET /api/info: counts, taxonomy and retention floor","E3":"GET /api/verify: integrity verification report",
- "E4":"POST /api/purge: retention purge with six month floor","E5":"POST /api/shred: crypto-shred a data subject","E6":"POST /api/checkpoint: create anchored checkpoint",
- "E7":"GET /api/attacks: attack suite results","E8":"GET /api/bench: latency benchmark","E9":"POST /api/events: append event with field validation"}
+_T = {"TST01":"appending events produces a valid chain of recorded events","TST02":"verification of an untouched log reports ok","TST03":"event taxonomy covers the Article 12 event classes",
+ "TST04":"each event carries system id, model version, timestamp and hashes","TST05":"biometric events lacking Article 12(3) fields are rejected","TST06":"purge below the six month retention floor is refused",
+ "TST07":"shredding a subject makes personal data unrecoverable while the chain verifies","TST08":"modified entry is detected","TST09":"forged hash chain without key is detected by signature",
+ "TST10":"deleted entry is detected","TST11":"reordered entries are detected","TST12":"backdated timestamp is detected","TST13":"truncated tail is detected by anchor",
+ "TST14":"restore after tamper","TST15":"asynchronous writer persists all events"}
+INV.update({k: "TEST " + TESTS[int(k[3:]) - 1] + ": " + v for k, v in _T.items()})
+_E = {"EVD1":"GET /api/events: list recorded log events","EVD2":"GET /api/info: counts, taxonomy and retention floor","EVD3":"GET /api/verify: integrity verification report",
+ "EVD4":"POST /api/purge: retention purge with six month floor","EVD5":"POST /api/shred: crypto-shred a data subject","EVD6":"POST /api/checkpoint: create anchored checkpoint",
+ "EVD7":"GET /api/attacks: attack suite results","EVD8":"GET /api/bench: latency benchmark","EVD9":"POST /api/events: append event with field validation"}
 INV.update({k: "EVIDENCE " + v for k, v in _E.items()})
+
+def validate():
+    """Consistency checks over the whole evaluation dataset. Returns a list of problems (empty = consistent)."""
+    p = []
+    uids = [u["id"] for u in UNITS]
+    if len(uids) != len(set(uids)): p.append("duplicate unit ids")
+    for u in UNITS:
+        if u["parent"] not in CORPUS: p.append(f"{u['id']}: parent {u['parent']} not in CORPUS")
+        for r in u["refs"]:
+            if r not in CORPUS: p.append(f"{u['id']}: ref {r} not in CORPUS")
+    if set(GOLD) != set(uids): p.append("GOLD keys differ from unit ids")
+    gids = [g[0] for v in GOLD.values() for g in v]
+    if len(gids) != len(set(gids)): p.append("duplicate gold requirement ids")
+    for v in GOLD.values():
+        for g in v:
+            if not g[2] or any(not k for k in g[2]): p.append(f"{g[0]}: empty key-term group")
+    if set(GOLD_LINKS) != set(gids): p.append("GOLD_LINKS keys differ from gold requirement ids")
+    for g, l in GOLD_LINKS.items():
+        if len(l) != len(set(l)): p.append(f"{g}: duplicate link target")
+        for x in l:
+            if x not in INV: p.append(f"{g}: link target {x} not in INV")
+        if sorted(x[0] for x in l) != ["C", "E", "T"]: p.append(f"{g}: links must be exactly one control, one test, one evidence")
+    for k in INV:
+        if not re.fullmatch(r"CTL\d+|TST\d+|EVD\d+", k): p.append(f"artifact id {k!r} violates the CTL/TST/EVD namespace")
+    if len(TESTS) != len(set(TESTS)): p.append("duplicate test names")
+    for k in _T:
+        if int(k[3:]) > len(TESTS): p.append(f"{k}: no matching entry in TESTS")
+    return p

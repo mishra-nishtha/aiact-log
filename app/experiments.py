@@ -1,12 +1,16 @@
-import random, tempfile, time
-from .chain import LogStore, AsyncWriter
+import random
+import tempfile
+import time
+
+from .chain import AsyncWriter, LogStore
 
 TYPES = ["inference"] * 6 + ["risk_flag", "pmm_signal", "operator_action", "human_override", "model_update", "biometric_match"]
 
 def make_event(i):
-    t = random.choice(TYPES)
+    rnd = random.Random(i)  # deterministic per index (reproducible runs)
+    t = rnd.choice(TYPES)
     e = {"event_type": t, "subject": f"user-{i % 7}", "input": f"query {i} text", "output": f"result {i}",
-         "model_version": "m-1.0", "meta": {"confidence": round(random.random(), 3)}}
+         "model_version": "m-1.0", "meta": {"confidence": round(rnd.random(), 3)}}
     if t == "biometric_match":
         now = time.time()
         e["meta"] = {"session_start": now - 5, "session_end": now, "reference_db": "watchlist-v3",
@@ -50,6 +54,8 @@ def run_attacks():
              ("delete an entry", "delete", {}),
              ("reorder two entries", "reorder", {}),
              ("backdate a timestamp", "backdate", {}),
+             ("forge an entry (no key)", "insert", {}),
+             ("replay a copied entry", "replay", {}),
              ("truncate tail (covered by anchor)", "truncate", {"n": 5}),
              ("truncate tail after last anchor (KNOWN LIMIT)", "truncate", {"n": 5, "late": True})]
     out = []
