@@ -205,7 +205,8 @@ def test_krippendorff():
     assert M.krippendorff_alpha_ordinal([[1, 1], [3, 3], [5, 5]]) == pytest.approx(1.0)
     assert M.krippendorff_alpha_ordinal([[1, 5], [3, 1], [5, 3]]) < 0.5
 def test_llm_output_sanitising(monkeypatch):
-    be = L.LLM("ollama")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    be = L.LLM("groq")
     monkeypatch.setattr(be, "_try", lambda u: '{"links":[["x"],"CTL1","CTL1",5,"nope"]}')
     assert be.link("r", {"CTL1": "d"}, None) == (["CTL1"], True)
     monkeypatch.setattr(be, "_try", lambda u: '{"requirements":[{"text":5},{"text":"ok"},"str"]}')

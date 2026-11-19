@@ -1,9 +1,23 @@
-import re, os, pytest
-from app.evala.data import UNITS, GOLD, GOLD_LINKS, INV, TESTS
+import os
+import re
+
+import pytest
+
 from app.evala import metrics as M
+from app.evala.data import GOLD, GOLD_LINKS, INV, TESTS, UNITS
 from app.evala.llm import extract_json, retrieve
 from app.evala.run import run
 
+
+def test_retrieval_metrics_and_f2(tmp_path):
+    r = M.retrieval_metrics()
+    assert r["n_units"] == 8 and 0 <= r["mrr"] <= 1 and 0 <= r["recall@5"] <= 1 and 0 <= r["ndcg@3"] <= 1
+    assert r["recall@1"] <= r["recall@3"] <= r["recall@5"]
+    assert M.prf([(1, 0, 0)])["f2"] == 1
+    from app.evala.ratings import report
+    assert report(str(tmp_path)) == {"missing": True}
+    
+    
 def test_inventory_tests_exist_in_suite():
     src = open(os.path.join(os.path.dirname(__file__), "test_chain.py"), encoding="utf-8").read()
     for t in TESTS: assert f"def {t}(" in src

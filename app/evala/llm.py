@@ -11,6 +11,25 @@ from collections import Counter
 
 from .data import CORPUS
 
+
+def _load_env():
+    """Load ROOT/.env (KEY=VALUE lines) without overriding real environment variables."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(root, ".env")
+    if not os.path.isfile(p): return
+    with open(p, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line: continue
+            k, v = line.split("=", 1); k = k.strip()
+            if k.startswith("export "): k = k[7:].strip()
+            if k and k not in os.environ: os.environ[k] = v.strip().strip('"').strip("'")
+_load_env()
+
+def groq_configured(): return bool(os.environ.get("GROQ_API_KEY"))
+class LLMFatal(RuntimeError):
+    """Non-retryable provider error (bad key, unknown model, exhausted quota): abort the whole run."""
+
 STOP = set("the a an of to and or in for is are be shall that this with by on as at from it its which any each such than not may".split())
 def toks(t): return [w for w in re.findall(r"[a-z0-9]+", t.lower()) if w not in STOP]
 
@@ -36,6 +55,12 @@ def retrieve(query, k=3, exclude=()):
 
 # ---------------- prompts (frozen; PROMPT_HASH recorded in results) ----------------
 SYS = "You are a requirements engineer for regulated AI systems. Reply with ONE JSON object and nothing else."
+
+
+def retrieve_ids(query, k=5, exclude=()):
+    """Top-k corpus ids (same TF-IDF ranking as retrieve), used for retrieval metrics."""
+    return [i for i, s in _RET.rank(query, exclude)[:k] if s > 0]
+
 def p_derive(text, ctx, schema):
     s = f"Provision text:\n{text}\n"
     if ctx: s += "\nContext passages (authoritative text):\n" + "\n".join(f"- [{i}] {t}" for i, t in ctx) + "\n"
@@ -94,56 +119,46 @@ class Heuristic:
         return list(best.values()), True
 
 class LLM:
-    DEFAULTS = {"anthropic": "claude-sonnet-5-5", "groq": "llama-3.3-70b-versatile", "ollama": "llama3.1"}
+    """Groq (OpenAI-compatible chat completions). The only LLM provider used by this project."""
+    URL = "https://api.groq.com/openai/v1/chat/completions"
+    DEFAULT_MODEL = "llama-3.3-70b-versatile"
+    MAX_WAIT = 120  # a longer retry-after means a quota is exhausted: stop instead of sleeping
 
-    def __init__(self, kind, model=None):
-        if kind not in self.DEFAULTS: raise ValueError(f"unknown backend {kind!r}")
-        self.kind, self.name = kind, kind
-        self.model = model or os.environ.get("LLM_MODEL") or self.DEFAULTS[kind]
+    def __init__(self, kind="groq", model=None):
+        if kind != "groq": raise ValueError(f"unknown backend {kind!r} (only 'groq' is supported)")
+        if not groq_configured(): raise SystemExit("Set GROQ_API_KEY (environment or .env), or use --backend heuristic")
+        self.kind, self.name = "groq", "groq"
+        self.model = model or os.environ.get("LLM_MODEL") or self.DEFAULT_MODEL
         self.temp_ok = True; self.errors = 0
-        if kind == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
-            raise SystemExit("Set ANTHROPIC_API_KEY (or use --backend groq|heuristic|ollama)")
-        if kind == "groq" and not os.environ.get("GROQ_API_KEY"):
-            raise SystemExit("Set GROQ_API_KEY in .env (or use --backend heuristic|ollama)")
 
-    def _post(self, url, headers, payload):
+    def _post(self, payload):
+        headers = {"Authorization": "Bearer " + os.environ["GROQ_API_KEY"], "content-type": "application/json",
+                   "User-Agent": "aiact-log/1.0"}  # the default Python-urllib agent can be blocked with HTTP 403
         for attempt in range(6):
             try:
-                req = urllib.request.Request(url, json.dumps(payload).encode(), headers)
+                req = urllib.request.Request(self.URL, json.dumps(payload).encode(), headers)
                 with urllib.request.urlopen(req, timeout=180) as r: return json.loads(r.read())
             except urllib.error.HTTPError as e:
                 body = e.read().decode("utf8", "ignore")
+                if e.code in (401, 403, 404): raise LLMFatal(f"Groq HTTP {e.code}: {body[:300]}")
                 if e.code == 400 and "temperature" in body and "temperature" in payload:
                     payload.pop("temperature"); self.temp_ok = False; continue
-                if e.code == 400 and "response_format" in body and "response_format" in payload:
+                if e.code == 400 and ("response_format" in body or "json_validate_failed" in body) and "response_format" in payload:
                     payload.pop("response_format"); continue
                 if e.code in (429, 500, 502, 503, 529):
                     try: wait = float(e.headers.get("retry-after", ""))
                     except (TypeError, ValueError): wait = 2 ** attempt * 2
-                    time.sleep(min(max(wait, 1), 60)); continue
+                    if wait > self.MAX_WAIT: raise LLMFatal(f"Groq rate/quota limit: retry in {int(wait)} s")
+                    time.sleep(max(wait, 1)); continue
                 raise RuntimeError(f"HTTP {e.code}: {body[:300]}")
             except (urllib.error.URLError, TimeoutError): time.sleep(2 ** attempt)
-        raise RuntimeError("LLM request failed after retries")
+        raise RuntimeError("Groq request failed after retries")
 
     def _complete(self, user):
-        if self.kind == "anthropic":
-            base = os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
-            r = self._post(base + "/v1/messages",
-                           {"x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                           {"model": self.model, "max_tokens": 2000, "temperature": 0, "system": SYS, "messages": [{"role": "user", "content": user}]})
-            return "".join(b.get("text", "") for b in r["content"])
-        if self.kind == "groq":  # OpenAI-compatible endpoint
-            r = self._post("https://api.groq.com/openai/v1/chat/completions",
-                           {"Authorization": "Bearer " + os.environ["GROQ_API_KEY"], "content-type": "application/json",
-                            "User-Agent": "aiact-log/1.0"},  # the default Python-urllib agent can be blocked with HTTP 403
-                           {"model": self.model, "temperature": 0, "max_tokens": 2000,
-                            "response_format": {"type": "json_object"},
-                            "messages": [{"role": "system", "content": SYS}, {"role": "user", "content": user}]})
-            return r["choices"][0]["message"].get("content") or ""
-        r = self._post("http://localhost:11434/api/chat", {"content-type": "application/json"},
-                       {"model": self.model, "stream": False, "format": "json", "options": {"temperature": 0},
+        r = self._post({"model": self.model, "temperature": 0, "max_tokens": 2000,
+                        "response_format": {"type": "json_object"},
                         "messages": [{"role": "system", "content": SYS}, {"role": "user", "content": user}]})
-        return r["message"]["content"]
+        return r["choices"][0]["message"].get("content") or ""
 
     def derive(self, text, ctx, schema):
         j = extract_json(self._try(p_derive(text, ctx, schema)))
@@ -156,6 +171,7 @@ class LLM:
         return list(dict.fromkeys(x for x in j["links"] if isinstance(x, str) and x in inv)), True
     def _try(self, u):
         try: return self._complete(u)
+        except LLMFatal: raise
         except Exception as e: self.errors += 1; print("LLM error:", e); return ""
 
 def make_backend(kind, model=None):

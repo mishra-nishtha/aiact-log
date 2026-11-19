@@ -5,7 +5,7 @@ import re
 from statistics import mean, stdev
 
 from .data import CORPUS, GOLD, GOLD_LINKS, UNITS
-from .llm import toks
+from .llm import retrieve_ids, toks
 
 MATCH_T, GROUND_T = 0.6, 0.5
 def keycov(text, keys):
@@ -55,7 +55,30 @@ def score_links(pred, unit_id):
 def prf(tuples):
     tp, fp, fn = (sum(t[i] for t in tuples) for i in range(3))
     p = tp / (tp + fp) if tp + fp else 0; r = tp / (tp + fn) if tp + fn else 0
-    return {"precision": p, "recall": r, "f1": 2 * p * r / (p + r) if p + r else 0}
+    return {"precision": p, "recall": r, "f1": 2 * p * r / (p + r) if p + r else 0,
+            "f2": 5 * p * r / (4 * p + r) if 4 * p + r else 0}
+    
+def retrieval_metrics(ks=(1, 3, 5)):
+    """Retriever evaluated on its own. Query = unit text; relevant = the unit's reference corpus ids;
+    the unit's parent provision is excluded. Units with no cross-references are skipped.
+    Binary-relevance nDCG."""
+    units = [u for u in UNITS if u["refs"]]
+    rec = {k: [] for k in ks}; nd = {k: [] for k in ks}; rr = []
+    for u in units:
+        rel = set(u["refs"]); ranked = retrieve_ids(u["text"], max(ks), exclude={u["parent"]})
+        first = next((i for i, c in enumerate(ranked, 1) if c in rel), None)
+        rr.append(1 / first if first else 0)
+        for k in ks:
+            top = ranked[:k]
+            rec[k].append(len(rel & set(top)) / len(rel))
+            dcg = sum(1 / math.log2(i + 1) for i, c in enumerate(top, 1) if c in rel)
+            idcg = sum(1 / math.log2(i + 1) for i in range(1, min(len(rel), k) + 1))
+            nd[k].append(dcg / idcg if idcg else 0)
+    return {"n_units": len(units), "retriever": "tfidf-cosine", "mrr": round(mean(rr), 3) if rr else None,
+            **{f"recall@{k}": round(mean(rec[k]), 3) if units else None for k in ks},
+            **{f"ndcg@{k}": round(mean(nd[k]), 3) if units else None for k in ks},
+            "note": "relevance = author-drafted refs; units without cross-references are not scored"}
+
 def bootstrap_f1(tuples, n=1000, seed=7):
     rnd = random.Random(seed); xs = sorted(prf([rnd.choice(tuples) for _ in tuples])["f1"] for _ in range(n))
     return [xs[int(.025 * n)], xs[int(.975 * n)]]

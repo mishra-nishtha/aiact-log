@@ -468,7 +468,68 @@ class LogStore:
             eh = h(canon(rec) + prev.encode())
             self.db.execute("UPDATE events SET prev_hash=?, entry_hash=? WHERE seq=?", (prev, eh, d["seq"]))
             prev = eh
+    # ---------- time check + ledger view (read-only, not part of verify()) ----------
+    def time_report(self, tol=300.0):
+        """Time-order anomalies: an entry far earlier than an earlier entry, or far outside the window bracketed
+        by checkpoint times. Both clocks are the host wall clock (no RFC 3161), so a skewed host is not caught."""
+        with self.lock:
+            rows = self.db.execute("SELECT seq, ts FROM events ORDER BY seq").fetchall()
+            cps = self.db.execute("SELECT id, from_seq, to_seq, ts FROM checkpoints ORDER BY id").fetchall()
+        out, top = [], None
+        for seq, ts in rows:
+            if top is not None and ts < top - tol:
+                out.append({"seq": seq, "type": "non_monotonic",
+                            "detail": f"ts is {top - ts:.0f}s earlier than an earlier entry"})
+            top = ts if top is None else max(top, ts)
+        by, prev_cp = dict(rows), None
+        for _cid, f, t, cts in cps:
+            for s in range(f, t + 1):
+                ts = by.get(s)
+                if ts is None: continue
+                if ts > cts + tol:
+                    out.append({"seq": s, "type": "after_checkpoint",
+                                "detail": f"ts is {ts - cts:.0f}s after the checkpoint that covers it"})
+                elif prev_cp is not None and ts < prev_cp - tol:
+                    out.append({"seq": s, "type": "before_previous_checkpoint",
+                                "detail": f"ts is {prev_cp - ts:.0f}s before the previous checkpoint"})
+            prev_cp = cts
+        return {"tolerance_s": tol, "checked": len(rows), "anomaly_count": len(out), "anomalies": out[:200],
+                "clock_source": "host wall clock (no RFC 3161 / external time authority)"}
 
+    def ledger(self):
+        """Checkpoints as hash-linked blocks. Linking = the anchor log (each anchor stores the previous anchor's hash)."""
+        with self.lock:
+            cps = self.db.execute("SELECT id,from_seq,to_seq,root,head_hash,ts,sig FROM checkpoints ORDER BY id").fetchall()
+        anchors, bad = self._read_anchors()
+        link, prev = {}, GENESIS
+        for a in anchors:
+            body = {k: v for k, v in a.items() if k != "hash"}
+            link.setdefault(a["cp"], {"a": a, "prev_ok": a["prev"] == prev, "hash_ok": h(canon(body)) == a["hash"]})
+            prev = a["hash"]
+        blocks = []
+        for cid, f, t, root, hh, ts, sig in cps:
+            try:
+                self.pk.verify(bytes.fromhex(sig), canon({"from": f, "to": t, "root": root, "head": hh}))
+                sig_ok = True
+            except Exception:
+                sig_ok = False
+            L = link.get(cid)
+            a = L["a"] if L else None
+            blocks.append({"block": cid, "from_seq": f, "to_seq": t, "events": t - f + 1, "merkle_root": root,
+                           "head_hash": hh, "ts": ts, "signature_ok": sig_ok, "anchored": a is not None,
+                           "anchor_hash": a["hash"] if a else None, "anchor_prev": a["prev"] if a else None,
+                           "anchor_matches_checkpoint": bool(a and (a["to_seq"], a["head_hash"], a["root"]) == (t, hh, root)),
+                           "link_ok": bool(L and L["prev_ok"] and L["hash_ok"])})
+        ok = not bad and all(b["signature_ok"] and b["anchored"] and b["anchor_matches_checkpoint"] and b["link_ok"] for b in blocks)
+        return {"chain_ok": ok, "blocks": blocks, "genesis": GENESIS, "anchor_log_bad_lines": bad, "pubkey": self.pubkey_hex,
+                "properties": [
+                    ["Hash linking", "each anchor stores the hash of the previous anchor"],
+                    ["Merkle root per block", "yes (root over the entry hashes of the checkpoint range)"],
+                    ["Signature", "Ed25519 over from/to/root/head by the writer key"],
+                    ["Consensus / distributed nodes", "none: single writer, single node"],
+                    ["Smart contracts", "none"],
+                    ["Witness", "local file anchors.jsonl (simulated external witness)"],
+                    ["Public blockchain anchoring", "not implemented"]]}
     # ---------- reads ----------
     def list(self, limit=50):
         limit = max(1, min(int(limit), 1000))
@@ -490,6 +551,12 @@ class LogStore:
             c = self.db.execute("SELECT COUNT(*) FROM checkpoints").fetchone()[0]
             return {"events": n, "checkpoints": c, "head_hash": self.head[1], "pubkey": self.pubkey_hex,
                     "tampered": self.tampered, "anchors": len(self._anchors())}
+            
+            
+    def legacy_subjects(self):
+        """Rows written before subject pseudonymisation (subject not starting with 'p_')."""
+        with self.lock:
+            return self.db.execute("SELECT COUNT(*) FROM events WHERE substr(subject,1,2) != 'p_'").fetchone()[0]        
 
 def _gap_event(n): return {"event_type": "logger_gap", "subject": "system", "meta": {"dropped": n}}
 
